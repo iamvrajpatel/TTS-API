@@ -40,6 +40,18 @@ This project provides a Text-to-Speech (TTS) API using Python.
    python main.py
    ```
 
+- Example API call using `curl`:
+
+   ```sh
+   curl --location 'http://localhost:8000/tts/' \
+   --header 'Content-Type: application/json' \
+   --data '{
+       "text": "howw youu doinnnn???",
+       "language": "en",
+       "gender": "male"
+   }'
+   ```
+
 ## Notes
 
 - Ensure you are using Python 3.11.9 to avoid compatibility issues.
