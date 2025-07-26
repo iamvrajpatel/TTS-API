@@ -9,18 +9,18 @@ This project provides a Text-to-Speech (TTS) API using Python.
 
 ## Installation
 
-1. **Clone the repository** (if applicable):
-
-   ```sh
-   git clone https://github.com/iamvrajpatel/TTS-API.git
-   cd tts-api
-   ```
-
-2. **Set up a virtual environment** (recommended):
+1. **Set up a virtual environment** (recommended):
 
    ```sh
    python3.11 -m venv .venv
    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+   ```
+
+2. **Clone the repository** (if applicable):
+
+   ```sh
+   git clone https://github.com/iamvrajpatel/TTS-API.git
+   cd tts-api
    ```
 
 3. **Install dependencies:**
