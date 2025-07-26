@@ -57,6 +57,9 @@ This project provides a Text-to-Speech (TTS) API using Python.
 - Ensure you are using Python 3.11.9 to avoid compatibility issues.
 - If you add new libraries, update `requirements.txt` accordingly.
 
+## Used Configuration of GPU
+- [Used RunPod Configuration](https://console.runpod.io/deploy?gpu=RTX%20A4500&count=1&template=runpod-torch-v280)
+
 ## License
 
 This project is provided as-is. See individual library licenses for details.
