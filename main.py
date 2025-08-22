@@ -6,7 +6,7 @@ from typing import List, Tuple
 import numpy as np
 import soundfile as sf
 import torch
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Form, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, constr
 from TTS.api import TTS
@@ -14,6 +14,8 @@ from TTS.tts.configs.xtts_config import XttsConfig, XttsAudioConfig, XttsArgs
 from TTS.config.shared_configs import BaseDatasetConfig
 from transformers import GPT2Model
 from transformers.generation.utils import GenerationMixin
+
+from utils.utils import chunk_text
 
 # Make GPT2Model compatible with GenerationMixin
 if not issubclass(GPT2Model, GenerationMixin):
@@ -51,28 +53,6 @@ class TTSRequest(BaseModel):
     language: constr(to_lower=True)
     gender:   constr(to_lower=True)
 
-def chunk_text(text: str, language: str, max_length: int) -> List[str]:
-    """
-    Split text into chunks by sentence delimiter appropriate for the language,
-    each chunk ≤ max_length characters.
-    """
-    delim_map = {"hi": "।", "en": "."}
-    delim = delim_map.get(language, ".")
-    # ensure we keep the delimiter on each split
-    sentences = [s.strip() + delim for s in text.strip().split(delim) if s.strip()]
-    chunks: List[str] = []
-    current = ""
-    for s in sentences:
-        # +1 for possible space
-        if len(current) + len(s) + 1 <= max_length:
-            current = (current + " " + s).strip()
-        else:
-            if current:
-                chunks.append(current)
-            current = s
-    if current:
-        chunks.append(current)
-    return chunks
 
 @app.post("/tts/")
 async def synthesize(req: TTSRequest):
@@ -114,6 +94,51 @@ async def synthesize(req: TTSRequest):
     sf.write(out_path, combined, 24000)
 
     return FileResponse(out_path, media_type="audio/wav", filename=filename)
+
+@app.post("/clone-voice")
+async def clone_voice(
+    text: str = Form(...),
+    language: str = Form(default="hi"),
+    reference_audio: UploadFile = File(...)
+):
+    try:
+        unique_id = str(uuid.uuid4())
+        ref_audio_path = f"temp_ref_{unique_id}.wav"
+        output_path = f"tts_outputs\cloned_voice_{unique_id}.wav"
+        
+        # Save uploaded reference audio
+        with open(ref_audio_path, "wb") as f:
+            content = await reference_audio.read()
+            f.write(content)
+        
+        # Chunk text if too long
+        limits = {"hi": 250, "en": 300}
+        max_len = limits.get(language, 300)
+        text_chunks = chunk_text(text, language, max_len)
+        audio_chunks = []
+        
+        # Generate audio for each chunk
+        for chunk in text_chunks:
+            wav = tts.tts(text=chunk, language=language, speaker_wav=ref_audio_path)
+            audio_chunks.append(wav)
+        
+        # Combine audio chunks
+        combined_audio = np.concatenate(audio_chunks)
+        
+        # Save combined audio
+        sf.write(output_path, combined_audio, 24000)
+        
+        # Clean up temp reference file
+        os.remove(ref_audio_path)
+        
+        return FileResponse(
+            path=output_path,
+            media_type="audio/wav",
+            filename=f"cloned_voice_{unique_id}.wav"
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/")
 async def root():
