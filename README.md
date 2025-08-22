@@ -51,6 +51,15 @@ This project provides a Text-to-Speech (TTS) API using Python.
        "gender": "male"
    }'
    ```
+   ---------------------------------
+  ```sh
+  curl --location 'http://172.16.56.148:8000/clone-voice' \
+  --header 'Content-Type: application/json' \
+  --form 'text="<enter-text>"' \
+  --form 'language="en"' \
+  --form 'reference_audio=@"/D:/Python/dia1.6/Narendra_Modi_voice.ogg"'
+  ```
+   
 
 ## Notes
 
