@@ -85,7 +85,7 @@ async def synthesize(req: TTSRequest):
 
     # 4) Concatenate and write to disk
     combined = np.concatenate(waves, axis=0)
-    out_dir = "tts_outputs"
+    out_dir = "output"  # changed from "tts_outputs" to "output"
     os.makedirs(out_dir, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{lang}_{gen}_{ts}.wav"
@@ -104,7 +104,9 @@ async def clone_voice(
     try:
         unique_id = str(uuid.uuid4())
         ref_audio_path = f"temp_ref_{unique_id}.wav"
-        output_path = f"tts_outputs\cloned_voice_{unique_id}.wav"
+        output_dir = "output"  # changed from "tts_outputs" to "output"
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, f"cloned_voice_{unique_id}.wav")
         
         # Save uploaded reference audio
         with open(ref_audio_path, "wb") as f:
