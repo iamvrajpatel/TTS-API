@@ -2,6 +2,7 @@ import os
 import uuid
 from datetime import datetime
 from typing import List, Tuple
+from pydub import AudioSegment
 
 import numpy as np
 import soundfile as sf
@@ -14,6 +15,7 @@ from TTS.tts.configs.xtts_config import XttsConfig, XttsAudioConfig, XttsArgs
 from TTS.config.shared_configs import BaseDatasetConfig
 from transformers import GPT2Model
 from transformers.generation.utils import GenerationMixin
+from scipy.signal import butter, filtfilt
 
 from utils.utils import chunk_text
 
@@ -53,6 +55,52 @@ class TTSRequest(BaseModel):
     language: constr(to_lower=True)
     gender:   constr(to_lower=True)
 
+def create_silence_padding(sample_rate: int = 24000, duration_ms: int = 100) -> np.ndarray:
+    """Create a silence padding of specified duration in milliseconds"""
+    num_samples = int((duration_ms / 1000) * sample_rate)
+    return np.zeros(num_samples)
+
+def crossfade(a: np.ndarray, b: np.ndarray, overlap_samples: int = 1000) -> np.ndarray:
+    """Crossfade two audio segments"""
+    if len(a) < overlap_samples or len(b) < overlap_samples:
+        return np.concatenate([a, b])
+    
+    # Create fade curves
+    fade_out = np.linspace(1.0, 0.0, overlap_samples)
+    fade_in = np.linspace(0.0, 1.0, overlap_samples)
+    
+    # Apply crossfade
+    a[-overlap_samples:] *= fade_out
+    b[:overlap_samples] *= fade_in
+    
+    return np.concatenate([a[:-overlap_samples], b])
+
+def normalize_audio(audio: np.ndarray) -> np.ndarray:
+    """Normalize audio to prevent volume differences"""
+    return audio / (np.max(np.abs(audio)) + 1e-6)
+
+def apply_lowpass(audio: np.ndarray, cutoff: float = 10000, fs: int = 24000) -> np.ndarray:
+    """Apply lowpass filter to reduce high-frequency artifacts"""
+    nyquist = fs * 0.5
+    normal_cutoff = cutoff / nyquist
+    b, a = butter(5, normal_cutoff, btype='low', analog=False)
+    return filtfilt(b, a, audio)
+
+def save_as_mp3(audio_array: np.ndarray, output_path: str, sample_rate: int = 24000) -> str:
+    """Convert numpy array to MP3 file and return the path"""
+    wav_path = output_path.replace('.mp3', '_temp.wav')
+    mp3_path = output_path
+    
+    # Save as WAV first
+    sf.write(wav_path, audio_array, sample_rate)
+    
+    # Convert to MP3
+    audio = AudioSegment.from_wav(wav_path)
+    audio.export(mp3_path, format='mp3')
+    
+    # Clean up temporary WAV file
+    os.remove(wav_path)
+    return mp3_path
 
 @app.post("/tts/")
 async def synthesize(req: TTSRequest):
@@ -76,24 +124,40 @@ async def synthesize(req: TTSRequest):
 
     # 3) Synthesize each chunk to a numpy waveform
     waves: List[np.ndarray] = []
-    for chunk in chunks:
+    for i, chunk in enumerate(chunks):
         try:
-            wav = tts.tts(text=chunk, speaker_wav=ref_wav, language=lang)
+            # Add slight overlap in chunks by including a few words from next chunk
+            if i < len(chunks) - 1:
+                words = chunks[i+1].split()
+                overlap_text = ' '.join(words[:2]) if words else ''
+                chunk_with_overlap = f"{chunk} {overlap_text}"
+            else:
+                chunk_with_overlap = chunk
+                
+            wav = tts.tts(text=chunk_with_overlap, speaker_wav=ref_wav, language=lang)
+            wav = normalize_audio(wav)
+            wav = apply_lowpass(wav)
+            waves.append(wav)
         except Exception as e:
             raise HTTPException(500, f"TTS generation failed on chunk '{chunk}': {e}")
-        waves.append(wav)
 
-    # 4) Concatenate and write to disk
-    combined = np.concatenate(waves, axis=0)
-    out_dir = "output"  # changed from "tts_outputs" to "output"
+    # Concatenate with crossfading
+    if not waves:
+        raise HTTPException(500, "No audio generated")
+        
+    result = waves[0]
+    for wav in waves[1:]:
+        result = crossfade(result, wav)
+    
+    # Write to disk
+    out_dir = "output"
     os.makedirs(out_dir, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{lang}_{gen}_{ts}.wav"
+    filename = f"{lang}_{gen}_{ts}.mp3"
     out_path = os.path.join(out_dir, filename)
-    # assuming model outputs at 24000 Hz
-    sf.write(out_path, combined, 24000)
+    out_path = save_as_mp3(result, out_path)
 
-    return FileResponse(out_path, media_type="audio/wav", filename=filename)
+    return FileResponse(out_path, media_type="audio/mp3", filename=filename)
 
 @app.post("/clone-voice")
 async def clone_voice(
@@ -106,7 +170,7 @@ async def clone_voice(
         ref_audio_path = f"temp_ref_{unique_id}.wav"
         output_dir = "output"  # changed from "tts_outputs" to "output"
         os.makedirs(output_dir, exist_ok=True)
-        output_path = os.path.join(output_dir, f"cloned_voice_{unique_id}.wav")
+        output_path = os.path.join(output_dir, f"cloned_voice_{unique_id}.mp3")
         
         # Save uploaded reference audio
         with open(ref_audio_path, "wb") as f:
@@ -120,23 +184,36 @@ async def clone_voice(
         audio_chunks = []
         
         # Generate audio for each chunk
-        for chunk in text_chunks:
-            wav = tts.tts(text=chunk, language=language, speaker_wav=ref_audio_path)
+        for i, chunk in enumerate(text_chunks):
+            # Add overlap with next chunk
+            if i < len(text_chunks) - 1:
+                words = text_chunks[i+1].split()
+                overlap_text = ' '.join(words[:2]) if words else ''
+                chunk_with_overlap = f"{chunk} {overlap_text}"
+            else:
+                chunk_with_overlap = chunk
+                
+            wav = tts.tts(text=chunk_with_overlap, language=language, speaker_wav=ref_audio_path)
+            wav = normalize_audio(wav)
+            wav = apply_lowpass(wav)
             audio_chunks.append(wav)
         
-        # Combine audio chunks
-        combined_audio = np.concatenate(audio_chunks)
+        # Combine chunks with crossfading
+        if audio_chunks:
+            result = audio_chunks[0]
+            for chunk in audio_chunks[1:]:
+                result = crossfade(result, chunk)
         
-        # Save combined audio
-        sf.write(output_path, combined_audio, 24000)
+        # Save combined audio as MP3
+        output_path = save_as_mp3(result, output_path)
         
         # Clean up temp reference file
         os.remove(ref_audio_path)
         
         return FileResponse(
             path=output_path,
-            media_type="audio/wav",
-            filename=f"cloned_voice_{unique_id}.wav"
+            media_type="audio/mp3",
+            filename=f"cloned_voice_{unique_id}.mp3"
         )
         
     except Exception as e:
