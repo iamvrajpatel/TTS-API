@@ -1,31 +1,46 @@
 from typing import List
 import numpy as np
 from scipy.signal import butter, filtfilt
+import re
 
 
-def chunk_text(text: str, language: str, max_length: int) -> List[str]:
+def chunk_text(text: str, language: str, max_length: int = 230) -> List[str]:
     """
-    Split text into chunks by words (space), each chunk ≤ max_length characters.
-    Words are not split between chunks.
+    Split text into sentence-based chunks, each ≤ max_length characters.
+    If a single sentence exceeds max_length, it will be further split by words.
     """
-    words = text.strip().split()
+    # 1. Split into sentences
+    sentences = re.split(r'(?<=[.!?।:;,\-])\s+', text.strip())
+
     chunks: List[str] = []
-    current_words = []
-    current_len = 0
+    current_chunk = ""
 
-    for word in words:
-        add_len = len(word) + (1 if current_words else 0)
-        if current_len + add_len <= max_length:
-            current_words.append(word)
-            current_len += add_len
+    for sentence in sentences:
+        # If sentence itself is longer than max_length → split by words
+        if len(sentence) > max_length:
+            words = sentence.split()
+            temp_chunk = ""
+            for word in words:
+                if len(temp_chunk) + len(word) + 1 <= max_length:
+                    temp_chunk += (" " if temp_chunk else "") + word
+                else:
+                    chunks.append(temp_chunk.strip())
+                    temp_chunk = word
+            if temp_chunk:
+                chunks.append(temp_chunk.strip())
+            continue  # move to next sentence
+
+        # Otherwise, try to add the sentence to the current chunk
+        if len(current_chunk) + len(sentence) + 1 <= max_length:
+            current_chunk += (" " if current_chunk else "") + sentence
         else:
-            if current_words:
-                chunks.append(' '.join(current_words))
-            # Start new chunk with current word
-            current_words = [word]
-            current_len = len(word)
-    if current_words:
-        chunks.append(' '.join(current_words))
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            current_chunk = sentence
+
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+
     return chunks
 
 def create_silence_padding(sample_rate: int = 24000, duration_ms: int = 100) -> np.ndarray:

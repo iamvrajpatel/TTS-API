@@ -13,7 +13,7 @@ from TTS.config.shared_configs import BaseDatasetConfig
 from transformers import GPT2Model
 from transformers.generation.utils import GenerationMixin
 
-from utils.utils import chunk_text, apply_lowpass, normalize_audio, crossfade
+from utils.utils import chunk_text, apply_lowpass, normalize_audio, create_silence_padding
 from utils.others import save_as_mp3
 from utils.remove_bg import clean_and_extend_audio
 
@@ -72,18 +72,16 @@ async def run_tts_task(func, *args, **kwargs):
 async def synthesize_tts_chunks(chunks, ref_wav, lang, request: Request):
     waves: List[np.ndarray] = []
     for i, chunk in enumerate(chunks):
-        # Check for cancellation
         if await request.is_disconnected():
             raise asyncio.CancelledError()
         try:
-            # Add slight overlap in chunks by including a few words from next chunk
-            if i < len(chunks) - 1:
-                words = chunks[i+1].split()
-                overlap_text = ' '.join(words[:2]) if words else ''
-                chunk_with_overlap = f"{chunk} {overlap_text}"
-            else:
-                chunk_with_overlap = chunk
-            wav = await asyncio.to_thread(tts.tts, text=chunk_with_overlap, speaker_wav=ref_wav, language=lang)
+            # ✅ FIX: do not add overlap words from next chunk
+            wav = await asyncio.to_thread(
+                tts.tts,
+                text=chunk,
+                speaker_wav=ref_wav,
+                language=lang
+            )
             wav = normalize_audio(wav)
             wav = apply_lowpass(wav)
             waves.append(wav)
@@ -120,9 +118,10 @@ async def synthesize(req: TTSRequest, request: Request):
         if not waves:
             raise HTTPException(500, "No audio generated")
             
+        silence = create_silence_padding(sample_rate=24000, duration_ms=5)
         result = waves[0]
         for wav in waves[1:]:
-            result = crossfade(result, wav)
+            result = np.concatenate([result, silence, wav])
         
         # Write to disk
         out_dir = "output"
@@ -145,18 +144,16 @@ async def synthesize(req: TTSRequest, request: Request):
 async def clone_voice_chunks(text_chunks, cleaned_ref_audio_path, language, request: Request):
     audio_chunks = []
     for i, chunk in enumerate(text_chunks):
-        # Check for cancellation
         if await request.is_disconnected():
             raise asyncio.CancelledError()
         try:
-            # Add overlap with next chunk
-            if i < len(text_chunks) - 1:
-                words = text_chunks[i+1].split()
-                overlap_text = ' '.join(words[:2]) if words else ''
-                chunk_with_overlap = f"{chunk} {overlap_text}"
-            else:
-                chunk_with_overlap = chunk
-            wav = await asyncio.to_thread(tts.tts, text=chunk_with_overlap, language=language, speaker_wav=cleaned_ref_audio_path)
+            # ✅ FIX: remove overlap logic, just use clean chunk
+            wav = await asyncio.to_thread(
+                tts.tts,
+                text=chunk,
+                language=language,
+                speaker_wav=cleaned_ref_audio_path
+            )
             wav = normalize_audio(wav)
             wav = apply_lowpass(wav)
             audio_chunks.append(wav)
@@ -199,9 +196,10 @@ async def clone_voice(
 
         # Combine chunks with crossfading
         if audio_chunks:
+            silence = create_silence_padding(sample_rate=24000, duration_ms=5)
             result = audio_chunks[0]
             for chunk in audio_chunks[1:]:
-                result = crossfade(result, chunk)
+                result = np.concatenate([result, silence, chunk])
 
         # Save combined audio as MP3
         output_path = save_as_mp3(result, output_path)
