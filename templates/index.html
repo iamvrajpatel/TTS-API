@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>4-Way Multilingual TTS</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f5f6fa; margin: 0; padding: 0; }
+    .container { width: 600px; margin: 40px auto; background: #fff; padding: 25px;
+      border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+    h1 { text-align: center; color: #2c3e50; }
+    .tabs { display: flex; margin-bottom: 20px; border-bottom: 2px solid #ddd; }
+    .tab { flex: 1; padding: 12px; text-align: center; cursor: pointer;
+      background: #ecf0f1; border-radius: 6px 6px 0 0; margin-right: 5px;
+      transition: background 0.3s; }
+    .tab.active { background: #3498db; color: white; font-weight: bold; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    form { display: flex; flex-direction: column; }
+    label { margin-top: 10px; font-weight: bold; }
+    textarea, select, input[type="file"] { padding: 8px; border: 1px solid #ccc;
+      border-radius: 6px; margin-top: 5px; }
+    button { margin-top: 20px; padding: 12px; background: #3498db; border: none;
+      border-radius: 6px; color: white; font-size: 16px; cursor: pointer;
+      transition: background 0.3s; }
+    button:hover { background: #2980b9; }
+    button:disabled { background: #95a5a6; cursor: not-allowed; }
+    audio { margin-top: 15px; width: 100%; }
+    .spinner { display: none; margin: 15px auto; border: 6px solid #f3f3f3;
+      border-top: 6px solid #3498db; border-radius: 50%; width: 40px; height: 40px;
+      animation: spin 1s linear infinite; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Multilingual TTS & Voice Cloning</h1>
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('tts')">TTS</div>
+      <div class="tab" onclick="switchTab('clone')">Voice Clone</div>
+    </div>
+
+    <!-- TTS TAB -->
+    <div id="tts" class="tab-content active">
+      <form id="ttsForm">
+        <label>Text:</label>
+        <textarea name="text" rows="4" required></textarea>
+        <label>Language:</label>
+        <select name="language" required>
+          <option value="en">English</option>
+          <option value="hi">Hindi</option>
+        </select>
+        <label>Gender:</label>
+        <select name="gender" required>
+          <option value="male">Male</option>
+          <option value="female">Female</option>
+        </select>
+        <button type="submit">Generate TTS</button>
+      </form>
+      <div class="spinner" id="ttsSpinner"></div>
+      <audio id="ttsAudio" controls></audio>
+    </div>
+
+    <!-- CLONE TAB -->
+    <div id="clone" class="tab-content">
+      <form id="cloneForm" enctype="multipart/form-data">
+        <label>Text:</label>
+        <textarea name="text" rows="4" required></textarea>
+        <label>Language:</label>
+        <select name="language" required>
+          <option value="en">English</option>
+          <option value="hi">Hindi</option>
+        </select>
+        <label>Reference Audio (mp3/wav):</label>
+        <input type="file" name="reference_audio" accept="audio/*" required />
+        <button type="submit">Clone Voice</button>
+      </form>
+      <div class="spinner" id="cloneSpinner"></div>
+      <audio id="cloneAudio" controls></audio>
+    </div>
+  </div>
+
+  <script>
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      document.querySelector(`.tab[onclick="switchTab('${tabId}')"]`).classList.add('active');
+      document.getElementById(tabId).classList.add('active');
+    }
+
+    async function handleForm(formId, spinnerId, audioId, url, isJson = true) {
+      const form = document.getElementById(formId);
+      const spinner = document.getElementById(spinnerId);
+      const audio = document.getElementById(audioId);
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        spinner.style.display = "block";
+        form.querySelector("button").disabled = true;
+        try {
+          const resp = await fetch(url, {
+            method: "POST",
+            body: isJson ? JSON.stringify(Object.fromEntries(new FormData(form))) : new FormData(form),
+            headers: isJson ? { "Content-Type": "application/json" } : undefined
+          });
+          if (!resp.ok) throw new Error("Server error");
+          const blob = await resp.blob();
+          audio.src = URL.createObjectURL(blob);
+        } catch (err) {
+          alert("Error: " + err.message);
+        } finally {
+          spinner.style.display = "none";
+          form.querySelector("button").disabled = false;
+        }
+      });
+    }
+
+    handleForm("ttsForm", "ttsSpinner", "ttsAudio", "/tts/", true);
+    handleForm("cloneForm", "cloneSpinner", "cloneAudio", "/clone-voice", false);
+  </script>
+</body>
+</html>
