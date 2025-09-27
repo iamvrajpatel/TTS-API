@@ -2,6 +2,9 @@ from typing import List
 import numpy as np
 from scipy.signal import butter, filtfilt
 import re
+from fastapi import FastAPI, HTTPException, Form, UploadFile, File, Request
+import asyncio
+import os
 
 
 def chunk_text(text: str, language: str, max_length: int = 230) -> List[str]:
@@ -73,3 +76,54 @@ def apply_lowpass(audio: np.ndarray, cutoff: float = 10000, fs: int = 24000) -> 
     normal_cutoff = cutoff / nyquist
     b, a = butter(5, normal_cutoff, btype='low', analog=False)
     return filtfilt(b, a, audio)
+
+
+async def clone_voice_chunks(text_chunks, cleaned_ref_audio_path, language, request: Request):
+    audio_chunks = []
+    for i, chunk in enumerate(text_chunks):
+        if await request.is_disconnected():
+            raise asyncio.CancelledError()
+        try:
+            # ✅ FIX: remove overlap logic, just use clean chunk
+            wav = await asyncio.to_thread(
+                tts.tts,
+                text=chunk,
+                language=language,
+                speaker_wav=cleaned_ref_audio_path
+            )
+            wav = normalize_audio(wav)
+            wav = apply_lowpass(wav)
+            audio_chunks.append(wav)
+        except Exception as e:
+            raise HTTPException(500, f"TTS generation failed on chunk '{chunk}': {e}")
+    return audio_chunks
+
+async def run_tts_task(func, *args, **kwargs):
+    # Acquire semaphore for limited concurrency
+    async with tts_semaphore:
+        # Check for cancellation
+        try:
+            return await func(*args, **kwargs)
+        except asyncio.CancelledError:
+            # Optionally cleanup resources here
+            raise HTTPException(499, "Request cancelled by client.")
+
+async def synthesize_tts_chunks(chunks, ref_wav, lang, request: Request):
+    waves: List[np.ndarray] = []
+    for i, chunk in enumerate(chunks):
+        if await request.is_disconnected():
+            raise asyncio.CancelledError()
+        try:
+            # ✅ FIX: do not add overlap words from next chunk
+            wav = await asyncio.to_thread(
+                tts.tts,
+                text=chunk,
+                speaker_wav=ref_wav,
+                language=lang
+            )
+            wav = normalize_audio(wav)
+            wav = apply_lowpass(wav)
+            waves.append(wav)
+        except Exception as e:
+            raise HTTPException(500, f"TTS generation failed on chunk '{chunk}': {e}")
+    return waves
