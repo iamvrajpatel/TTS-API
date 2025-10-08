@@ -6,7 +6,6 @@ from fastapi import FastAPI, HTTPException, Form, UploadFile, File, Request
 import asyncio
 import os
 
-
 def chunk_text(text: str, language: str, max_length: int = 230) -> List[str]:
     """
     Split text into sentence-based chunks, each ≤ max_length characters.

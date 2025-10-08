@@ -1,9 +1,11 @@
 import os
 import uuid
 import logging
+import threading
 from datetime import datetime
 import numpy as np
 import torch
+import asyncio
 from fastapi import FastAPI, HTTPException, Form, UploadFile, File, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,11 +17,13 @@ from TTS.config.shared_configs import BaseDatasetConfig
 from transformers import GPT2Model
 from transformers.generation.utils import GenerationMixin
 
-from utils.utils import chunk_text, create_silence_padding
+from utils.utils import chunk_text, create_silence_padding, run_tts_task, \
+    synthesize_tts_chunks, clone_voice_chunks
 from utils.others import save_as_mp3
 from utils.remove_bg import clean_and_extend_audio
 
-import asyncio
+# Create a global threading lock
+processing_lock = threading.Lock()
 
 # Logging
 logger = logging.getLogger("uvicorn.error")
@@ -65,8 +69,11 @@ class TTSRequest(BaseModel):
     language: constr(to_lower=True)
     gender: constr(to_lower=True)
 
+# ------------------- SUPPORT FUNCTIONS -------------------
+
 MAX_WORKERS = 1
 tts_semaphore = asyncio.Semaphore(MAX_WORKERS)
+
 
 # Helper wrapper for TTS
 async def run_tts_task(func, *args, **kwargs):
@@ -91,8 +98,14 @@ def clone_voice_chunks(chunks, ref_wav, lang, request):
 
 @app.post("/tts/")
 async def synthesize(req: TTSRequest, request: Request):
+    acquired = processing_lock.acquire(blocking=False)
+    
+    if not acquired:
+        raise HTTPException(status_code=503, detail=f"Server is busy! Try after sometime!!")
+    
     temp_files = []
     try:
+        
         lang = req.language
         gen = req.gender
         if lang not in SUPPORTED_LANGS:
@@ -128,10 +141,13 @@ async def synthesize(req: TTSRequest, request: Request):
         save_as_mp3(result, out_path)
 
         return FileResponse(out_path, media_type="audio/mp3", filename=filename)
+    
     except Exception as e:
         logger.exception("Error in /tts/")
         raise HTTPException(status_code=500, detail=str(e))
+    
     finally:
+        processing_lock.release()
         for f in temp_files:
             if os.path.exists(f):
                 os.remove(f)
@@ -143,6 +159,12 @@ async def clone_voice(
     language: str = Form(default="hi"),
     reference_audio: UploadFile = File(...)
 ):
+    
+    acquired = processing_lock.acquire(blocking=False)
+    
+    if not acquired:
+        raise HTTPException(status_code=503, detail=f"Server is busy! Try after sometime!!")
+    
     temp_files = []
     try:
         unique_id = str(uuid.uuid4())
@@ -188,10 +210,13 @@ async def clone_voice(
         save_as_mp3(result, output_path)
 
         return FileResponse(output_path, media_type="audio/mp3", filename=f"cloned_voice_{unique_id}.mp3")
+    
     except Exception as e:
         logger.exception("Error in /clone-voice")
         raise HTTPException(status_code=500, detail=str(e))
+    
     finally:
+        processing_lock.release()
         for f in temp_files:
             if os.path.exists(f):
                 os.remove(f)
