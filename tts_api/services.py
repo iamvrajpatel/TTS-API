@@ -2,7 +2,6 @@ import asyncio
 import io
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
@@ -11,12 +10,6 @@ from tts_api.catalog import LanguageCatalog
 
 
 logger = logging.getLogger(__name__)
-BASE_DIR = Path(__file__).resolve().parent.parent
-LOCAL_MODEL_ROOT = BASE_DIR / "models"
-
-
-def _repo_dir(repo_id: str) -> Path:
-    return LOCAL_MODEL_ROOT / repo_id.replace("/", "--")
 
 
 class ModelNotReadyError(RuntimeError):
@@ -43,26 +36,18 @@ class LoadedModelBundle:
 
 def build_default_model_loader(
     model_name: str = "ai4bharat/indic-parler-tts",
-    model_root: Path = LOCAL_MODEL_ROOT,
 ) -> Callable[[], LoadedModelBundle]:
     def load() -> LoadedModelBundle:
-        from huggingface_hub import snapshot_download
         import torch
         from parler_tts import ParlerTTSForConditionalGeneration
         from transformers import AutoTokenizer
 
-        model_root.mkdir(parents=True, exist_ok=True)
-        model_dir = _repo_dir(model_name)
-        snapshot_download(repo_id=model_name, local_dir=str(model_dir))
-
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        model = ParlerTTSForConditionalGeneration.from_pretrained(str(model_dir)).to(device)
-        tokenizer = AutoTokenizer.from_pretrained(str(model_dir))
-
-        text_encoder_name = model.config.text_encoder._name_or_path
-        text_encoder_dir = _repo_dir(text_encoder_name)
-        snapshot_download(repo_id=text_encoder_name, local_dir=str(text_encoder_dir))
-        description_tokenizer = AutoTokenizer.from_pretrained(str(text_encoder_dir))
+        model = ParlerTTSForConditionalGeneration.from_pretrained(model_name).to(device)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        description_tokenizer = AutoTokenizer.from_pretrained(
+            model.config.text_encoder._name_or_path
+        )
         return LoadedModelBundle(
             model=model,
             tokenizer=tokenizer,
