@@ -1,74 +1,118 @@
-# TTS API
+# AI4Bharat Indic Parler TTS API
 
-This project provides a Text-to-Speech (TTS) API using Python.
+FastAPI app for hosted text-to-speech using `ai4bharat/indic-parler-tts`, with an HTML interface and explicit speaker selection for multiple Indian languages.
 
 ## Requirements
 
-- **Python version:** 3.11.9  
-  Make sure you have Python 3.11.9 installed. You can download it from [python.org](https://www.python.org/downloads/release/python-3119/).
+- Python 3.11 is recommended
+- CUDA-enabled PyTorch is optional; the app falls back to CPU when CUDA is unavailable
 
 ## Installation
 
-1. **Set up a virtual environment** (recommended):
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
 
-   ```sh
-   python3.11 -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-   ```
+If you are fixing an existing broken Torch or Torchaudio install, reinstall matching wheels first.
 
-2. **Clone the repository** (if applicable):
+CPU-only:
 
-   ```sh
-   git clone https://github.com/iamvrajpatel/TTS-API.git
-   cd tts-api
-   ```
+```bash
+pip uninstall -y torch torchaudio
+pip install --index-url https://download.pytorch.org/whl/cpu torch==2.7.1 torchaudio==2.7.1
+pip install -r requirements.txt
+```
 
-3. **Install dependencies:**
+CUDA 12.6:
 
-   ```sh
-   pip install -r requirements.txt
-   ```
+```bash
+pip uninstall -y torch torchaudio
+pip install --index-url https://download.pytorch.org/whl/cu126 torch==2.7.1 torchaudio==2.7.1
+pip install -r requirements.txt
+```
 
-   If you need development or extra dependencies, check for additional requirements files or documentation.
+## Run the app
 
-## Usage
+```bash
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
 
-- Place your main application code in `main.py`.
-- Run the API server or scripts as needed:
+Open `http://localhost:8000/` for the hosted HTML interface.
 
-   ```sh
-   python main.py
-   ```
+## Troubleshooting
 
-- Example API call using `curl`:
+If startup fails with `libcudart.so.13` or another `torchaudio` shared-library error, the environment has incompatible Torch and Torchaudio wheels.
 
-   ```sh
-   curl --location 'http://localhost:8000/tts/' \
-   --header 'Content-Type: application/json' \
-   --data '{
-       "text": "howw youu doinnnn???",
-       "language": "en",
-       "gender": "male"
-   }'
-   ```
-   ---------------------------------
-  ```sh
-  curl --location 'http://172.16.56.148:8000/clone-voice' \
-  --header 'Content-Type: application/json' \
-  --form 'text="<enter-text>"' \
-  --form 'language="en"' \
-  --form 'reference_audio=@"/D:/Python/dia1.6/Narendra_Modi_voice.ogg"'
-  ```
-   
+Expected versions for this repo:
 
-## Notes
+- `torch==2.7.1`
+- `torchaudio==2.7.1`
 
-- Ensure you are using Python 3.11.9 to avoid compatibility issues.
-- If you add new libraries, update `requirements.txt` accordingly.
+After reinstalling, confirm with:
 
-## Used Configuration of GPU
-- [Used RunPod Configuration](https://console.runpod.io/deploy?gpu=RTX%20A4500&count=1&template=runpod-torch-v280)
+```bash
+python - <<'PY'
+import torch
+import torchaudio
+print("torch", torch.__version__)
+print("torchaudio", torchaudio.__version__)
+PY
+```
 
-## License
+## API
 
-This project is provided as-is. See individual library licenses for details.
+### `GET /`
+
+Serves the TTS HTML page.
+
+### `GET /health`
+
+Returns readiness and model-load details.
+
+### `POST /tts/`
+
+Generates a WAV response from JSON input.
+
+Using an existing speaker:
+
+```json
+{
+  "text": "अरे, तुम आज कैसे हो?",
+  "language": "hi",
+  "voice_mode": "speaker",
+  "speaker": "Divya"
+}
+```
+
+Using a custom description:
+
+```json
+{
+  "text": "अरे, तुम आज कैसे हो?",
+  "language": "hi",
+  "voice_mode": "description",
+  "voice_description": "A warm, expressive female voice with a slightly brisk pace, clear pronunciation, and a clean studio recording with almost no background noise."
+}
+```
+
+Example with `curl`:
+
+```bash
+curl --request POST "http://localhost:8000/tts/" \
+  --header "Content-Type: application/json" \
+  --output sample.wav \
+  --data '{
+    "text": "Namaste from the hosted Indic Parler TTS API.",
+    "language": "en",
+    "speaker": "Mary"
+  }'
+```
+
+## Supported languages
+
+Assamese, Bengali, Bodo, Chhattisgarhi, Dogri, English, Gujarati, Hindi, Kannada, Malayalam, Manipuri, Marathi, Nepali, Odia, Punjabi, Sanskrit, Tamil, Telugu.
+
+The UI is driven by the same server-side language catalog used for API validation, including recommended speakers for each language.
