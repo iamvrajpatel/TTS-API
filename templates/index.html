@@ -14,9 +14,9 @@
       --accent: #0d6c63;
       --accent-strong: #084c46;
       --accent-soft: #d4efe9;
-      --accent-soft-strong: #c1e6de;
       --border: rgba(29, 26, 23, 0.12);
       --danger: #a33737;
+      --warning: #9b631d;
       --shadow: 0 20px 50px rgba(82, 57, 29, 0.12);
       --radius: 22px;
     }
@@ -39,7 +39,7 @@
     }
 
     .shell {
-      width: min(1100px, 100%);
+      width: min(1120px, 100%);
       display: grid;
       grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
       gap: 24px;
@@ -117,6 +117,59 @@
       display: block;
       font-size: 1.2rem;
       margin-bottom: 4px;
+    }
+
+    .system-card {
+      margin-top: 18px;
+      padding: 18px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.74);
+      border: 1px solid rgba(29, 26, 23, 0.08);
+    }
+
+    .system-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 12px;
+      border-radius: 999px;
+      font-size: 0.88rem;
+      font-weight: 700;
+      border: 1px solid transparent;
+    }
+
+    .badge::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .badge-ready {
+      color: var(--accent-strong);
+      background: rgba(13, 108, 99, 0.1);
+      border-color: rgba(13, 108, 99, 0.16);
+    }
+
+    .badge-loading {
+      color: var(--warning);
+      background: rgba(181, 111, 59, 0.1);
+      border-color: rgba(181, 111, 59, 0.16);
+    }
+
+    .badge-error {
+      color: var(--danger);
+      background: rgba(163, 55, 55, 0.08);
+      border-color: rgba(163, 55, 55, 0.14);
     }
 
     .form-panel {
@@ -256,15 +309,38 @@
     }
 
     .player {
+      position: relative;
       padding: 18px;
       border-radius: 18px;
       border: 1px solid rgba(29, 26, 23, 0.08);
       background: var(--panel-strong);
+      overflow: hidden;
     }
 
     .player audio {
       width: 100%;
       margin-top: 12px;
+    }
+
+    .generation-meta {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .generation-chip {
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.86);
+      border: 1px solid rgba(29, 26, 23, 0.08);
+    }
+
+    .generation-chip strong {
+      display: block;
+      font-size: 0.86rem;
+      color: var(--muted);
+      margin-bottom: 4px;
     }
 
     .speaker-list {
@@ -297,8 +373,67 @@
       margin-bottom: 6px;
     }
 
+    .loader-overlay {
+      position: absolute;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 14px;
+      background: rgba(255, 250, 242, 0.9);
+      backdrop-filter: blur(4px);
+      z-index: 2;
+    }
+
+    .loader-overlay.active {
+      display: flex;
+    }
+
+    .wave-loader {
+      display: flex;
+      align-items: flex-end;
+      gap: 6px;
+      height: 42px;
+    }
+
+    .wave-loader span {
+      width: 8px;
+      height: 12px;
+      border-radius: 999px;
+      background: linear-gradient(180deg, #14786d 0%, #0d6c63 100%);
+      animation: wave 0.95s ease-in-out infinite;
+      transform-origin: bottom center;
+    }
+
+    .wave-loader span:nth-child(2) { animation-delay: 0.08s; }
+    .wave-loader span:nth-child(3) { animation-delay: 0.16s; }
+    .wave-loader span:nth-child(4) { animation-delay: 0.24s; }
+    .wave-loader span:nth-child(5) { animation-delay: 0.32s; }
+
+    @keyframes wave {
+      0%, 100% { transform: scaleY(0.55); opacity: 0.55; }
+      50% { transform: scaleY(1.8); opacity: 1; }
+    }
+
+    .loader-caption {
+      text-align: center;
+      color: var(--accent-strong);
+      font-weight: 700;
+    }
+
+    .loader-subcaption {
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
     @media (max-width: 880px) {
-      .shell {
+      .shell { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 700px) {
+      .generation-meta,
+      .grid {
         grid-template-columns: 1fr;
       }
     }
@@ -306,9 +441,9 @@
     @media (max-width: 640px) {
       body { padding: 18px; }
       .hero, .form-panel { padding: 22px; }
-      .grid { grid-template-columns: 1fr; }
       textarea { min-height: 160px; }
       .voice-tabs { grid-template-columns: 1fr; }
+      .system-row { align-items: flex-start; }
     }
   </style>
 </head>
@@ -334,7 +469,23 @@
         </div>
         <div class="meta-card">
           <strong>/tts/</strong>
-          JSON API returning <code>audio/wav</code>
+          Synced with backend health and timing
+        </div>
+      </div>
+
+      <div class="system-card">
+        <div class="system-row">
+          <div>
+            <strong>Backend sync</strong>
+            <div id="backendStatusBadge" class="badge badge-loading" style="margin-top: 10px;">Checking backend...</div>
+          </div>
+          <div>
+            <strong>Last sync</strong>
+            <div id="lastSyncTime" style="margin-top: 10px; color: var(--muted);">Not synced yet</div>
+          </div>
+        </div>
+        <div id="backendStatusText" style="margin-top: 14px; color: var(--muted);">
+          Waiting for backend status...
         </div>
       </div>
 
@@ -398,8 +549,35 @@
       </form>
 
       <div class="player">
+        <div id="loaderOverlay" class="loader-overlay">
+          <div class="wave-loader" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div class="loader-caption">Generating audio</div>
+          <div class="loader-subcaption">Backend and frontend stay synced while the request is running.</div>
+        </div>
+
         <strong>Preview</strong>
         <audio id="audioPlayer" controls></audio>
+
+        <div class="generation-meta">
+          <div class="generation-chip">
+            <strong>Generation time</strong>
+            <span id="generationTimeValue">Not generated yet</span>
+          </div>
+          <div class="generation-chip">
+            <strong>Voice mode</strong>
+            <span id="voiceModeValue">Preset speaker</span>
+          </div>
+          <div class="generation-chip">
+            <strong>Backend state</strong>
+            <span id="backendStateValue">Checking...</span>
+          </div>
+        </div>
       </div>
     </section>
   </div>
@@ -420,9 +598,18 @@
     const descriptionTab = document.getElementById("descriptionTab");
     const speakerPanel = document.getElementById("speakerPanel");
     const descriptionPanel = document.getElementById("descriptionPanel");
+    const backendStatusBadge = document.getElementById("backendStatusBadge");
+    const backendStatusText = document.getElementById("backendStatusText");
+    const lastSyncTime = document.getElementById("lastSyncTime");
+    const generationTimeValue = document.getElementById("generationTimeValue");
+    const voiceModeValue = document.getElementById("voiceModeValue");
+    const backendStateValue = document.getElementById("backendStateValue");
+    const loaderOverlay = document.getElementById("loaderOverlay");
 
     let audioUrl = null;
     let activeVoiceMode = "speaker";
+    let healthPollTimer = null;
+    let latestBackendStatus = "checking";
 
     function getSelectedLanguage() {
       return languages.find((language) => language.code === languageSelect.value) || languages[0];
@@ -483,6 +670,7 @@
 
       speakerSelect.required = speakerMode;
       voiceDescription.required = !speakerMode;
+      voiceModeValue.textContent = speakerMode ? "Preset speaker" : "Custom description";
     }
 
     function showStatus(message) {
@@ -499,9 +687,69 @@
       errorBox.style.display = "block";
     }
 
+    function formatDurationFromMs(milliseconds) {
+      const totalSeconds = Math.max(0, Math.round(Number(milliseconds) / 1000));
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    }
+
     function hideError() {
       errorBox.style.display = "none";
       errorBox.textContent = "";
+    }
+
+    function setLoaderState(isLoading) {
+      loaderOverlay.classList.toggle("active", isLoading);
+    }
+
+    function updateBackendStatus(data, syncedAt = new Date()) {
+      latestBackendStatus = data.status;
+      backendStatusBadge.className = "badge";
+
+      if (data.status === "ok") {
+        backendStatusBadge.classList.add("badge-ready");
+        backendStatusBadge.textContent = data.generation_in_progress ? "Backend ready • generating" : "Backend ready";
+        backendStatusText.textContent = data.generation_in_progress
+          ? `Model loaded on ${data.device || "unknown device"} and currently generating audio.`
+          : `Model loaded on ${data.device || "unknown device"} and ready for new requests.`;
+        backendStateValue.textContent = data.generation_in_progress ? "Generating" : "Ready";
+      } else if (data.status === "error") {
+        backendStatusBadge.classList.add("badge-error");
+        backendStatusBadge.textContent = "Backend error";
+        backendStatusText.textContent = data.model_error || "Backend reported a loading error.";
+        backendStateValue.textContent = "Error";
+      } else {
+        backendStatusBadge.classList.add("badge-loading");
+        backendStatusBadge.textContent = "Backend loading";
+        backendStatusText.textContent = "Model is still loading. The page will keep syncing automatically.";
+        backendStateValue.textContent = "Loading";
+      }
+
+      lastSyncTime.textContent = syncedAt.toLocaleTimeString();
+      submitButton.disabled = data.status !== "ok" || data.generation_in_progress;
+    }
+
+    async function syncBackendHealth() {
+      try {
+        const response = await fetch("/health", { cache: "no-store" });
+        const data = await response.json();
+        updateBackendStatus(data, new Date());
+      } catch (error) {
+        backendStatusBadge.className = "badge badge-error";
+        backendStatusBadge.textContent = "Backend unreachable";
+        backendStatusText.textContent = "Could not sync with the backend right now.";
+        backendStateValue.textContent = "Offline";
+        lastSyncTime.textContent = "Sync failed";
+        submitButton.disabled = true;
+      }
+    }
+
+    function startHealthPolling() {
+      if (healthPollTimer) {
+        window.clearInterval(healthPollTimer);
+      }
+      healthPollTimer = window.setInterval(syncBackendHealth, 10000);
     }
 
     speakerTab.addEventListener("click", () => setVoiceMode("speaker"));
@@ -518,7 +766,10 @@
       hideError();
       resetAudio();
       submitButton.disabled = true;
+      setLoaderState(true);
       showStatus("Generating speech. Please wait...");
+      generationTimeValue.textContent = "Generating...";
+      backendStateValue.textContent = "Generating";
 
       try {
         const payload = {
@@ -552,21 +803,30 @@
           throw new Error(message);
         }
 
+        const generationTimeMs = response.headers.get("X-Generation-Time-Ms");
+        generationTimeValue.textContent = generationTimeMs
+          ? formatDurationFromMs(generationTimeMs)
+          : "Completed";
+
         const blob = await response.blob();
         audioUrl = URL.createObjectURL(blob);
         audioPlayer.src = audioUrl;
         await audioPlayer.play().catch(() => undefined);
       } catch (error) {
         showError(error.message || "Speech generation failed.");
+        generationTimeValue.textContent = "Failed";
       } finally {
+        setLoaderState(false);
         hideStatus();
-        submitButton.disabled = false;
+        await syncBackendHealth();
       }
     });
 
     renderLanguages();
     renderSpeakers();
     setVoiceMode("speaker");
+    syncBackendHealth();
+    startHealthPolling();
   </script>
 </body>
 </html>

@@ -70,7 +70,7 @@ Serves the TTS HTML page.
 
 ### `GET /health`
 
-Returns readiness and model-load details.
+Returns readiness, model-load details, and whether audio generation is currently in progress.
 
 ### `POST /tts/`
 
@@ -110,6 +110,11 @@ curl --request POST "http://localhost:8000/tts/" \
     "speaker": "Mary"
   }'
 ```
+
+Response headers include:
+
+- `X-Generation-Time-Ms`: backend time spent generating the WAV output
+- `X-Voice-Mode`: either `speaker` or `description`
 
 ## Supported languages
 

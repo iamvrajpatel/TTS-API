@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -78,6 +79,7 @@ def create_app(
                 "model_name": tts_service.model_name,
                 "device": tts_service.device,
                 "model_error": load_error,
+                "generation_in_progress": tts_service.is_generating,
             },
             status_code=status_code,
         )
@@ -85,6 +87,7 @@ def create_app(
     @app.post("/tts/")
     async def synthesize(request_body: TTSRequest) -> Response:
         voice_label = request_body.speaker or "custom-description"
+        started_at = time.perf_counter()
         try:
             wav_bytes = await tts_service.synthesize(
                 language_code=request_body.language,
@@ -108,11 +111,15 @@ def create_app(
                 detail="Unexpected error during speech generation.",
             ) from exc
 
+        generation_time_ms = (time.perf_counter() - started_at) * 1000
+
         return Response(
             content=wav_bytes,
             media_type="audio/wav",
             headers={
-                "Content-Disposition": f'inline; filename="{_build_filename(request_body.language, voice_label)}"'
+                "Content-Disposition": f'inline; filename="{_build_filename(request_body.language, voice_label)}"',
+                "X-Generation-Time-Ms": f"{generation_time_ms:.0f}",
+                "X-Voice-Mode": request_body.voice_mode,
             },
         )
 

@@ -72,10 +72,15 @@ class IndicParlerTTSService:
         self._load_error: str | None = None
         self._load_lock = asyncio.Lock()
         self._synthesis_semaphore = asyncio.Semaphore(1)
+        self._active_generations = 0
 
     @property
     def is_ready(self) -> bool:
         return self._bundle is not None
+
+    @property
+    def is_generating(self) -> bool:
+        return self._active_generations > 0
 
     @property
     def load_error(self) -> str | None:
@@ -141,12 +146,14 @@ class IndicParlerTTSService:
             raise ServiceBusyError("The server is currently processing another request.") from exc
 
         try:
+            self._active_generations += 1
             return self._synthesize_sync(
                 self._bundle,
                 text,
                 description,
             )
         finally:
+            self._active_generations -= 1
             self._synthesis_semaphore.release()
 
     def _resolve_description(

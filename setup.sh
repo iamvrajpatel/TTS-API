@@ -1,3 +1,1 @@
-
-pip install torch==2.2.2+cpu torchaudio==2.2.2+cpu \
-  -f https://download.pytorch.org/whl/torch_stable.html
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121

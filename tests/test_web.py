@@ -32,6 +32,10 @@ class FakeWebService:
         return self.ready
 
     @property
+    def is_generating(self) -> bool:
+        return False
+
+    @property
     def model_name(self) -> str:
         return "fake-web-model"
 
@@ -76,7 +80,7 @@ class WebTests(unittest.TestCase):
         ) as client:
             response = client.get("/")
             self.assertEqual(response.status_code, 200)
-            self.assertIn("AI4Bharat Indic Parler TTS", response.text)
+            self.assertIn("Backend sync", response.text)
 
     def test_health_reflects_loaded_state(self) -> None:
         with TestClient(
@@ -97,6 +101,7 @@ class WebTests(unittest.TestCase):
 
         self.assertEqual(ready_response.status_code, 200)
         self.assertTrue(ready_response.json()["ready"])
+        self.assertFalse(ready_response.json()["generation_in_progress"])
         self.assertEqual(loading_response.status_code, 503)
         self.assertFalse(loading_response.json()["ready"])
 
@@ -132,6 +137,7 @@ class WebTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.headers["content-type"], "audio/wav")
+            self.assertIn("X-Generation-Time-Ms", response.headers)
             self.assertEqual(service.calls, [("hi", "Divya", "Namaste")])
 
     def test_tts_rejects_invalid_speaker(self) -> None:
