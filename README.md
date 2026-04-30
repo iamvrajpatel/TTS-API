@@ -42,6 +42,24 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 Open `http://localhost:8000/` for the hosted HTML interface.
 
+## Model storage
+
+The app stores Hugging Face model files inside this project instead of the global cache.
+
+Default local model path:
+
+```text
+TTS-API/models/ai4bharat--indic-parler-tts
+```
+
+The text encoder tokenizer is also stored locally under:
+
+```text
+TTS-API/models/<text-encoder-repo-name-with-slashes-replaced-by-->
+```
+
+These folders are created automatically on first startup or first download.
+
 ## Troubleshooting
 
 If startup fails with `libcudart.so.13` or another `torchaudio` shared-library error, the environment has incompatible Torch and Torchaudio wheels.
