@@ -16,6 +16,8 @@ from tts_api.services import (
     ModelLoadError,
     ModelNotReadyError,
     ReferenceAudioPreprocessor,
+    RequestCancellation,
+    RequestCancelledError,
     ServiceBusyError,
     SynthesisConcurrencyGate,
     XttsVoiceCloneService,
@@ -95,6 +97,18 @@ class FakeCloneModel:
                 "language": language,
             }
         )
+        return [0.1, -0.1, 0.2, -0.2]
+
+
+class CancellingCloneModel:
+    def __init__(self, cancellation: RequestCancellation) -> None:
+        self._cancellation = cancellation
+        self.calls: list[str] = []
+
+    def tts(self, text: str, speaker_wav: str, language: str) -> list[float]:
+        self.calls.append(text)
+        if len(self.calls) == 1:
+            self._cancellation.cancel()
         return [0.1, -0.1, 0.2, -0.2]
 
 
@@ -224,6 +238,25 @@ class ServiceTests(unittest.TestCase):
                 "Divya's voice sounds",
                 service._bundle.description_tokenizer.last_text,
             )
+
+        asyncio.run(scenario())
+
+    def test_synthesis_stops_when_request_is_cancelled(self) -> None:
+        async def scenario() -> None:
+            service = self.create_service()
+            await service.load()
+            cancellation = RequestCancellation()
+            cancellation.cancel()
+
+            with self.assertRaises(RequestCancelledError):
+                await service.synthesize(
+                    language_code="hi",
+                    speaker_name="Divya",
+                    text="Namaste",
+                    cancellation=cancellation,
+                )
+
+            self.assertEqual(service._bundle.model.generate_calls, [])
 
         asyncio.run(scenario())
 
@@ -367,3 +400,28 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(preprocessor.calls, [])
 
         asyncio.run(scenario())
+
+    def test_clone_service_stops_between_chunks_when_request_is_cancelled(self) -> None:
+        cancellation = RequestCancellation()
+        model = CancellingCloneModel(cancellation)
+        bundle = LoadedVoiceCloneBundle(
+            model=model,
+            device="cpu",
+            sampling_rate=24000,
+            model_name="fake-clone-model",
+        )
+        service = XttsVoiceCloneService(
+            catalog=build_default_catalog(),
+            model_loader=fake_clone_loader,
+        )
+
+        with self.assertRaises(RequestCancelledError):
+            service._synthesize_sync(
+                bundle,
+                ["first chunk", "second chunk"],
+                "en",
+                "/tmp/reference.wav",
+                cancellation,
+            )
+
+        self.assertEqual(model.calls, ["first chunk"])

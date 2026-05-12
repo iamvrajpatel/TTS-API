@@ -59,6 +59,7 @@ class FakeWebService:
         text: str,
         speaker_name: str | None = None,
         voice_description: str | None = None,
+        cancellation=None,  # type: ignore[no-untyped-def]
     ) -> bytes:
         if self._load_error:
             raise ModelLoadError(self._load_error)
@@ -119,6 +120,7 @@ class FakeCloneWebService:
         text: str,
         reference_audio: bytes,
         reference_filename: str | None = None,
+        cancellation=None,  # type: ignore[no-untyped-def]
     ) -> bytes:
         if self._load_error:
             raise VoiceCloneLoadError(self._load_error)

@@ -6,6 +6,7 @@ import math
 import re
 import shutil
 import tempfile
+import threading
 import warnings
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ from tts_api.catalog import LanguageCatalog, UnsupportedLanguageError
 logger = logging.getLogger(__name__)
 _GENERATION_MIXIN_WARNING_FRAGMENT = "doesn't directly inherit from `GenerationMixin`"
 XTTS_V2_SUPPORTED_LANGUAGE_CODES = ("en", "hi")
+_CANCELLED_SYNTHESIS = object()
 
 
 class _MessageFilter(logging.Filter):
@@ -109,6 +111,28 @@ class VoiceCloneLoadError(RuntimeError):
 
 class InvalidReferenceAudioError(ValueError):
     """Raised when the uploaded clone reference audio is not usable."""
+
+
+class RequestCancelledError(RuntimeError):
+    """Raised when speech generation should stop because the client disconnected."""
+
+
+class RequestCancellation:
+    def __init__(self) -> None:
+        self._event = threading.Event()
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self._event.is_set()
+
+    def cancel(self) -> None:
+        self._event.set()
+
+    def raise_if_cancelled(self) -> None:
+        if self.is_cancelled:
+            raise RequestCancelledError(
+                "Speech generation was cancelled because the client disconnected."
+            )
 
 
 @dataclass
@@ -384,6 +408,7 @@ class IndicParlerTTSService:
         text: str,
         speaker_name: str | None = None,
         voice_description: str | None = None,
+        cancellation: RequestCancellation | None = None,
     ) -> bytes:
         if self._load_error is not None:
             raise ModelLoadError(self._load_error)
@@ -396,13 +421,21 @@ class IndicParlerTTSService:
             speaker_name=speaker_name,
             voice_description=voice_description,
         )
+        request_cancellation = cancellation or RequestCancellation()
 
         async with self._generation_gate.claim():
-            return self._synthesize_sync(
+            wav_bytes = await asyncio.to_thread(
+                self._safely_synthesize_sync,
                 self._bundle,
                 text,
                 description,
+                request_cancellation,
             )
+            if wav_bytes is _CANCELLED_SYNTHESIS:
+                raise RequestCancelledError(
+                    "Speech generation was cancelled because the client disconnected."
+                )
+            return wav_bytes
 
     def _resolve_description(
         self,
@@ -425,12 +458,15 @@ class IndicParlerTTSService:
         bundle: LoadedModelBundle,
         text: str,
         description: str,
+        cancellation: RequestCancellation,
     ) -> bytes:
+        cancellation.raise_if_cancelled()
         description_inputs = bundle.description_tokenizer(
             description, return_tensors="pt"
         ).to(bundle.device)
         prompt_inputs = bundle.tokenizer(text, return_tensors="pt").to(bundle.device)
 
+        cancellation.raise_if_cancelled()
         generation = bundle.model.generate(
             input_ids=description_inputs.input_ids,
             attention_mask=description_inputs.attention_mask,
@@ -438,8 +474,21 @@ class IndicParlerTTSService:
             prompt_attention_mask=prompt_inputs.attention_mask,
         )
 
+        cancellation.raise_if_cancelled()
         audio_array = self._coerce_audio_array(generation)
         return self._encode_wav(audio_array, bundle.sampling_rate)
+
+    def _safely_synthesize_sync(
+        self,
+        bundle: LoadedModelBundle,
+        text: str,
+        description: str,
+        cancellation: RequestCancellation,
+    ) -> bytes | object:
+        try:
+            return self._synthesize_sync(bundle, text, description, cancellation)
+        except RequestCancelledError:
+            return _CANCELLED_SYNTHESIS
 
     def _coerce_audio_array(self, generation: Any) -> np.ndarray:
         if hasattr(generation, "cpu"):
@@ -538,10 +587,13 @@ class XttsVoiceCloneService:
         text: str,
         reference_audio: bytes,
         reference_filename: str | None = None,
+        cancellation: RequestCancellation | None = None,
     ) -> bytes:
         normalized_language = language_code.strip().lower()
         language = self._catalog.get_language(normalized_language)
         self._validate_supported_language(language)
+        request_cancellation = cancellation or RequestCancellation()
+        request_cancellation.raise_if_cancelled()
 
         await self.load()
         if self._load_error is not None:
@@ -556,12 +608,19 @@ class XttsVoiceCloneService:
         try:
             async with self._generation_gate.claim():
                 chunks = self._chunk_text(text, normalized_language)
-                return self._synthesize_sync(
+                wav_bytes = await asyncio.to_thread(
+                    self._safely_synthesize_sync,
                     self._bundle,
                     chunks,
                     normalized_language,
                     prepared_reference.path,
+                    request_cancellation,
                 )
+                if wav_bytes is _CANCELLED_SYNTHESIS:
+                    raise RequestCancelledError(
+                        "Speech generation was cancelled because the client disconnected."
+                    )
+                return wav_bytes
         finally:
             shutil.rmtree(prepared_reference.temp_dir, ignore_errors=True)
 
@@ -647,28 +706,53 @@ class XttsVoiceCloneService:
         chunks: list[str],
         language_code: str,
         reference_path: str,
+        cancellation: RequestCancellation,
     ) -> bytes:
-        waves = [
-            np.asarray(
-                bundle.model.tts(
-                    text=chunk,
-                    speaker_wav=reference_path,
-                    language=language_code,
-                ),
-                dtype=np.float32,
-            ).reshape(-1)
-            for chunk in chunks
-        ]
+        waves: list[np.ndarray] = []
+        for chunk in chunks:
+            cancellation.raise_if_cancelled()
+            waves.append(
+                np.asarray(
+                    bundle.model.tts(
+                        text=chunk,
+                        speaker_wav=reference_path,
+                        language=language_code,
+                    ),
+                    dtype=np.float32,
+                ).reshape(-1)
+            )
 
         if not waves:
             raise RuntimeError("No audio generated by the voice clone model.")
 
+        cancellation.raise_if_cancelled()
         combined_audio = waves[0]
         silence = np.zeros(max(1, int(bundle.sampling_rate * 0.005)), dtype=np.float32)
         for wave in waves[1:]:
+            cancellation.raise_if_cancelled()
             combined_audio = np.concatenate([combined_audio, silence, wave])
 
+        cancellation.raise_if_cancelled()
         return self._encode_wav(combined_audio, bundle.sampling_rate)
+
+    def _safely_synthesize_sync(
+        self,
+        bundle: LoadedVoiceCloneBundle,
+        chunks: list[str],
+        language_code: str,
+        reference_path: str,
+        cancellation: RequestCancellation,
+    ) -> bytes | object:
+        try:
+            return self._synthesize_sync(
+                bundle,
+                chunks,
+                language_code,
+                reference_path,
+                cancellation,
+            )
+        except RequestCancelledError:
+            return _CANCELLED_SYNTHESIS
 
     def _encode_wav(self, audio_array: np.ndarray, sample_rate: int) -> bytes:
         import soundfile as sf

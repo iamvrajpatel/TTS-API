@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import time
+from contextlib import suppress
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -19,6 +21,8 @@ from tts_api.services import (
     IndicParlerTTSService,
     ModelLoadError,
     ModelNotReadyError,
+    RequestCancellation,
+    RequestCancelledError,
     ServiceBusyError,
     VoiceCloneLoadError,
     XttsVoiceCloneService,
@@ -37,6 +41,18 @@ logger = logging.getLogger(__name__)
 def _build_filename(language_code: str, voice_label: str) -> str:
     safe_label = voice_label.strip().replace(" ", "_").lower()
     return f"{language_code}-{safe_label}.wav"
+
+
+async def _watch_for_disconnect(
+    request: Request,
+    cancellation: RequestCancellation,
+    poll_interval_seconds: float = 0.25,
+) -> None:
+    while not cancellation.is_cancelled:
+        if await request.is_disconnected():
+            cancellation.cancel()
+            return
+        await asyncio.sleep(poll_interval_seconds)
 
 
 def create_app(
@@ -101,15 +117,18 @@ def create_app(
         )
 
     @app.post("/tts/")
-    async def synthesize(request_body: TTSRequest) -> Response:
+    async def synthesize(request: Request, request_body: TTSRequest) -> Response:
         voice_label = request_body.speaker or "custom-description"
         started_at = time.perf_counter()
+        cancellation = RequestCancellation()
+        disconnect_task = asyncio.create_task(_watch_for_disconnect(request, cancellation))
         try:
             wav_bytes = await tts_service.synthesize(
                 language_code=request_body.language,
                 text=request_body.text,
                 speaker_name=request_body.speaker,
                 voice_description=request_body.voice_description,
+                cancellation=cancellation,
             )
         except UnsupportedLanguageError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -121,12 +140,20 @@ def create_app(
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ServiceBusyError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except RequestCancelledError as exc:
+            logger.info("Client disconnected during TTS synthesis")
+            raise HTTPException(status_code=499, detail=str(exc)) from exc
         except Exception as exc:
             logger.exception("Unexpected error during TTS synthesis")
             raise HTTPException(
                 status_code=500,
                 detail="Unexpected error during speech generation.",
             ) from exc
+        finally:
+            cancellation.cancel()
+            disconnect_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await disconnect_task
 
         generation_time_ms = (time.perf_counter() - started_at) * 1000
 
@@ -142,6 +169,7 @@ def create_app(
 
     @app.post("/clone-voice")
     async def clone_voice(
+        request: Request,
         text: str = Form(...),
         language: str = Form(...),
         reference_audio: UploadFile = File(...),
@@ -153,12 +181,15 @@ def create_app(
 
         started_at = time.perf_counter()
         reference_audio_bytes = await reference_audio.read()
+        cancellation = RequestCancellation()
+        disconnect_task = asyncio.create_task(_watch_for_disconnect(request, cancellation))
         try:
             wav_bytes = await voice_clone_service.synthesize(
                 language_code=request_body.language,
                 text=request_body.text,
                 reference_audio=reference_audio_bytes,
                 reference_filename=reference_audio.filename,
+                cancellation=cancellation,
             )
         except UnsupportedLanguageError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -168,12 +199,20 @@ def create_app(
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ServiceBusyError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except RequestCancelledError as exc:
+            logger.info("Client disconnected during voice clone synthesis")
+            raise HTTPException(status_code=499, detail=str(exc)) from exc
         except Exception as exc:
             logger.exception("Unexpected error during voice clone synthesis")
             raise HTTPException(
                 status_code=500,
                 detail="Unexpected error during voice clone generation.",
             ) from exc
+        finally:
+            cancellation.cancel()
+            disconnect_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await disconnect_task
 
         generation_time_ms = (time.perf_counter() - started_at) * 1000
         voice_label = Path(reference_audio.filename or "reference").stem or "reference"

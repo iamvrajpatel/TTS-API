@@ -510,7 +510,7 @@
     <section class="panel form-panel">
       <form id="ttsForm">
         <div>
-          <label for="text">Text (In Specific Language)</label>
+          <label for="text">Text (In Specific LanguageA warm, expressive female voice with a slightly brisk pace, clear pronunciation, and a clean studio recording with almost no background noise.)</label>
           <textarea id="text" name="text" placeholder="Type or paste text in the selected language." required></textarea>
         </div>
 
@@ -635,6 +635,7 @@
     let audioUrl = null;
     let activeVoiceMode = "speaker";
     let healthPollTimer = null;
+    let currentRequestController = null;
 
     function getSelectedLanguage() {
       return (
@@ -753,6 +754,21 @@
       errorBox.style.display = "block";
     }
 
+    function abortOngoingRequest(message = "") {
+      if (currentRequestController) {
+        currentRequestController.abort();
+        currentRequestController = null;
+      }
+      if (message) {
+        showError(message);
+      }
+      setLoaderState(false);
+      hideStatus();
+      submitButton.disabled = true;
+      generationTimeValue.textContent = "Cancelled";
+      backendStateValue.textContent = "Disconnected";
+    }
+
     function formatDurationFromMs(milliseconds) {
       const totalSeconds = Math.max(0, Math.round(Number(milliseconds) / 1000));
       const minutes = Math.floor(totalSeconds / 60);
@@ -796,6 +812,16 @@
     }
 
     async function syncBackendHealth() {
+      if (!navigator.onLine) {
+        backendStatusBadge.className = "badge badge-error";
+        backendStatusBadge.textContent = "Frontend offline";
+        backendStatusText.textContent = "Internet connection is unavailable. Requests are paused until the connection returns.";
+        backendStateValue.textContent = "Offline";
+        lastSyncTime.textContent = "Offline";
+        submitButton.disabled = true;
+        return;
+      }
+
       try {
         const response = await fetch("/health", { cache: "no-store" });
         const data = await response.json();
@@ -803,7 +829,7 @@
       } catch (error) {
         backendStatusBadge.className = "badge badge-error";
         backendStatusBadge.textContent = "Backend unreachable";
-        backendStatusText.textContent = "Could not sync with the backend right now.";
+        backendStatusText.textContent = "Could not sync with the backend right now. The current request will stay stopped until the connection recovers.";
         backendStateValue.textContent = "Offline";
         lastSyncTime.textContent = "Sync failed";
         submitButton.disabled = true;
@@ -817,7 +843,7 @@
       healthPollTimer = window.setInterval(syncBackendHealth, 10000);
     }
 
-    async function requestAudio(text, language) {
+    async function requestAudio(text, language, signal) {
       if (activeVoiceMode === "clone") {
         const file = referenceAudioInput.files[0];
         if (!file) {
@@ -832,6 +858,7 @@
         return fetch("/clone-voice", {
           method: "POST",
           body: payload,
+          signal,
         });
       }
 
@@ -853,6 +880,7 @@
           "Content-Type": "application/json",
         },
         body: JSON.stringify(payload),
+        signal,
       });
     }
 
@@ -866,6 +894,22 @@
       resetAudio();
     });
 
+    window.addEventListener("offline", () => {
+      abortOngoingRequest("Connection lost. The active generation request was cancelled.");
+      syncBackendHealth();
+    });
+
+    window.addEventListener("online", () => {
+      hideError();
+      syncBackendHealth();
+    });
+
+    window.addEventListener("beforeunload", () => {
+      if (currentRequestController) {
+        currentRequestController.abort();
+      }
+    });
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       hideError();
@@ -875,11 +919,13 @@
       showStatus("Generating speech. Please wait...");
       generationTimeValue.textContent = "Generating...";
       backendStateValue.textContent = "Generating";
+      currentRequestController = new AbortController();
 
       try {
         const response = await requestAudio(
           document.getElementById("text").value,
           languageSelect.value,
+          currentRequestController.signal,
         );
 
         if (!response.ok) {
@@ -903,9 +949,15 @@
         audioPlayer.src = audioUrl;
         await audioPlayer.play().catch(() => undefined);
       } catch (error) {
-        showError(error.message || "Speech generation failed.");
-        generationTimeValue.textContent = "Failed";
+        if (error.name === "AbortError") {
+          showError("Connection closed. Backend generation was asked to stop.");
+          generationTimeValue.textContent = "Cancelled";
+        } else {
+          showError(error.message || "Speech generation failed.");
+          generationTimeValue.textContent = "Failed";
+        }
       } finally {
+        currentRequestController = null;
         setLoaderState(false);
         hideStatus();
         await syncBackendHealth();
