@@ -56,3 +56,22 @@ class TTSRequest(BaseModel):
                     "voice_description must be provided when voice_mode is 'description'."
                 )
         return self
+
+
+class VoiceCloneRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    text: str
+    language: str
+
+    @field_validator("text")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("Text must not be empty.")
+        return value.strip()
+
+    @field_validator("language")
+    @classmethod
+    def normalize_language(cls, value: str) -> str:
+        return value.strip().lower()

@@ -1,11 +1,24 @@
 from tts_api.catalog import build_default_catalog
-from tts_api.services import IndicParlerTTSService
+from tts_api.services import (
+    IndicParlerTTSService,
+    SynthesisConcurrencyGate,
+    XttsVoiceCloneService,
+)
 from tts_api.web import create_app
 
 
 catalog = build_default_catalog()
-tts_service = IndicParlerTTSService(catalog=catalog)
-app = create_app(service=tts_service, catalog=catalog)
+generation_gate = SynthesisConcurrencyGate(max_concurrent_requests=1)
+tts_service = IndicParlerTTSService(catalog=catalog, generation_gate=generation_gate)
+voice_clone_service = XttsVoiceCloneService(
+    catalog=catalog,
+    generation_gate=generation_gate,
+)
+app = create_app(
+    service=tts_service,
+    clone_service=voice_clone_service,
+    catalog=catalog,
+)
 
 
 if __name__ == "__main__":

@@ -188,6 +188,7 @@
 
     textarea,
     select,
+    input[type="file"],
     button {
       width: 100%;
       border-radius: 16px;
@@ -196,7 +197,8 @@
     }
 
     textarea,
-    select {
+    select,
+    input[type="file"] {
       padding: 14px 16px;
       background: rgba(255, 255, 255, 0.82);
       color: var(--text);
@@ -220,7 +222,7 @@
 
     .voice-tabs {
       display: inline-grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 8px;
       padding: 6px;
       border-radius: 18px;
@@ -451,11 +453,11 @@
   <div class="shell">
     <section class="panel hero">
       <span class="eyebrow">AI4Bharat Indic Parler TTS</span>
-      <h1>Choose a built-in speaker or describe a new voice yourself.</h1>
+      <h1>Choose a built-in speaker, describe one, or clone a real voice.</h1>
       <p class="lede">
         Generate speech from the hosted FastAPI app using the AI4Bharat Indic
-        Parler TTS model. Stay with the curated speaker list for faster picking,
-        or write your own voice description to shape the delivery more directly.
+        Parler TTS model for curated and described voices, or switch to XTTS
+        cloning when you want the output to follow a reference recording more closely.
       </p>
 
       <div class="meta">
@@ -464,11 +466,11 @@
           Supported languages
         </div>
         <div class="meta-card">
-          <strong>2 voice modes</strong>
-          Preset speaker or custom description
+          <strong>3 voice modes</strong>
+          Speaker, description, or voice clone
         </div>
         <div class="meta-card">
-          <strong>/tts/</strong>
+          <strong>/tts/ + /clone-voice</strong>
           Synced with backend health and timing
         </div>
       </div>
@@ -498,12 +500,17 @@
         <strong>Demo description</strong>
         {{ custom_description_placeholder }}
       </div>
+
+      <div class="placeholder-card">
+        <strong>Clone mode</strong>
+        Upload a short reference clip to imitate a real voice across the full language catalog.
+      </div>
     </section>
 
     <section class="panel form-panel">
       <form id="ttsForm">
         <div>
-          <label for="text">Text</label>
+          <label for="text">Text (In Specific Language)</label>
           <textarea id="text" name="text" placeholder="Type or paste text in the selected language." required></textarea>
         </div>
 
@@ -512,6 +519,7 @@
           <div class="voice-tabs" role="tablist" aria-label="Voice source">
             <button id="speakerTab" class="voice-tab active" type="button" data-mode="speaker">Select existing speaker</button>
             <button id="descriptionTab" class="voice-tab" type="button" data-mode="description">Write your own description</button>
+            <button id="cloneTab" class="voice-tab" type="button" data-mode="clone">Clone from reference audio</button>
           </div>
         </div>
 
@@ -539,6 +547,19 @@
           ></textarea>
           <div class="hint" style="margin-top: 14px;">
             Describe tone, pace, clarity, recording quality, or emotion. The demo placeholder above is a good starting point.
+          </div>
+        </div>
+
+        <div id="clonePanel" class="voice-panel">
+          <label for="referenceAudio">Reference audio</label>
+          <input
+            id="referenceAudio"
+            name="reference_audio"
+            type="file"
+            accept=".wav,.mp3,.m4a,.flac,.ogg,audio/*"
+          >
+          <div id="cloneHint" class="hint" style="margin-top: 14px;">
+            Upload a clean voice sample for the best clone quality.
           </div>
         </div>
 
@@ -584,9 +605,11 @@
 
   <script>
     const languages = {{ languages | tojson }};
+    const cloneSupportedLanguageCodes = new Set({{ clone_supported_languages | tojson }});
     const languageSelect = document.getElementById("language");
     const speakerSelect = document.getElementById("speaker");
     const speakerHint = document.getElementById("speakerHint");
+    const cloneHint = document.getElementById("cloneHint");
     const recommendedSpeakers = document.getElementById("recommendedSpeakers");
     const statusBox = document.getElementById("statusBox");
     const errorBox = document.getElementById("errorBox");
@@ -594,10 +617,13 @@
     const submitButton = document.getElementById("submitButton");
     const form = document.getElementById("ttsForm");
     const voiceDescription = document.getElementById("voiceDescription");
+    const referenceAudioInput = document.getElementById("referenceAudio");
     const speakerTab = document.getElementById("speakerTab");
     const descriptionTab = document.getElementById("descriptionTab");
+    const cloneTab = document.getElementById("cloneTab");
     const speakerPanel = document.getElementById("speakerPanel");
     const descriptionPanel = document.getElementById("descriptionPanel");
+    const clonePanel = document.getElementById("clonePanel");
     const backendStatusBadge = document.getElementById("backendStatusBadge");
     const backendStatusText = document.getElementById("backendStatusText");
     const lastSyncTime = document.getElementById("lastSyncTime");
@@ -609,10 +635,12 @@
     let audioUrl = null;
     let activeVoiceMode = "speaker";
     let healthPollTimer = null;
-    let latestBackendStatus = "checking";
 
     function getSelectedLanguage() {
-      return languages.find((language) => language.code === languageSelect.value) || languages[0];
+      return (
+        languages.find((language) => language.code === languageSelect.value) ||
+        languages[0]
+      );
     }
 
     function resetAudio() {
@@ -625,13 +653,36 @@
     }
 
     function renderLanguages() {
+      const selectedLanguageCode = languageSelect.value || languages[0]?.code;
+      const availableLanguages = activeVoiceMode === "clone"
+        ? languages.filter((language) => cloneSupportedLanguageCodes.has(language.code))
+        : languages;
       languageSelect.innerHTML = "";
-      languages.forEach((language) => {
+      availableLanguages.forEach((language) => {
         const option = document.createElement("option");
         option.value = language.code;
         option.textContent = language.display_name;
         languageSelect.appendChild(option);
       });
+
+      if (selectedLanguageCode && availableLanguages.some((language) => language.code === selectedLanguageCode)) {
+        languageSelect.value = selectedLanguageCode;
+      } else if (availableLanguages[0]) {
+        languageSelect.value = availableLanguages[0].code;
+      }
+    }
+
+    function renderCloneHint() {
+      const selectedLanguage = getSelectedLanguage();
+      if (!selectedLanguage) {
+        cloneHint.textContent = "Reference-audio cloning is currently unavailable.";
+        return;
+      }
+
+      const supportedLanguageNames = languages
+        .filter((language) => cloneSupportedLanguageCodes.has(language.code))
+        .map((language) => language.display_name);
+      cloneHint.textContent = `Reference-audio cloning is available for ${selectedLanguage.display_name}. Supported clone languages: ${supportedLanguageNames.join(", ")}.`;
     }
 
     function renderSpeakers() {
@@ -657,20 +708,35 @@
         pill.textContent = `${selectedLanguage.display_name}: ${speakerName}`;
         recommendedSpeakers.appendChild(pill);
       });
+
+      renderCloneHint();
     }
 
     function setVoiceMode(mode) {
       activeVoiceMode = mode;
       const speakerMode = mode === "speaker";
+      const descriptionMode = mode === "description";
+      const cloneMode = mode === "clone";
+
+      renderLanguages();
 
       speakerTab.classList.toggle("active", speakerMode);
-      descriptionTab.classList.toggle("active", !speakerMode);
+      descriptionTab.classList.toggle("active", descriptionMode);
+      cloneTab.classList.toggle("active", cloneMode);
       speakerPanel.classList.toggle("active", speakerMode);
-      descriptionPanel.classList.toggle("active", !speakerMode);
+      descriptionPanel.classList.toggle("active", descriptionMode);
+      clonePanel.classList.toggle("active", cloneMode);
 
       speakerSelect.required = speakerMode;
-      voiceDescription.required = !speakerMode;
-      voiceModeValue.textContent = speakerMode ? "Preset speaker" : "Custom description";
+      voiceDescription.required = descriptionMode;
+      referenceAudioInput.required = cloneMode;
+      voiceModeValue.textContent = speakerMode
+        ? "Preset speaker"
+        : descriptionMode
+          ? "Custom description"
+          : "Voice clone";
+      renderSpeakers();
+      renderCloneHint();
     }
 
     function showStatus(message) {
@@ -704,7 +770,6 @@
     }
 
     function updateBackendStatus(data, syncedAt = new Date()) {
-      latestBackendStatus = data.status;
       backendStatusBadge.className = "badge";
 
       if (data.status === "ok") {
@@ -752,8 +817,48 @@
       healthPollTimer = window.setInterval(syncBackendHealth, 10000);
     }
 
+    async function requestAudio(text, language) {
+      if (activeVoiceMode === "clone") {
+        const file = referenceAudioInput.files[0];
+        if (!file) {
+          throw new Error("Upload a reference audio file to use clone mode.");
+        }
+
+        const payload = new FormData();
+        payload.append("text", text);
+        payload.append("language", language);
+        payload.append("reference_audio", file);
+
+        return fetch("/clone-voice", {
+          method: "POST",
+          body: payload,
+        });
+      }
+
+      const payload = {
+        text,
+        language,
+        voice_mode: activeVoiceMode,
+      };
+
+      if (activeVoiceMode === "speaker") {
+        payload.speaker = speakerSelect.value;
+      } else {
+        payload.voice_description = voiceDescription.value;
+      }
+
+      return fetch("/tts/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+    }
+
     speakerTab.addEventListener("click", () => setVoiceMode("speaker"));
     descriptionTab.addEventListener("click", () => setVoiceMode("description"));
+    cloneTab.addEventListener("click", () => setVoiceMode("clone"));
 
     languageSelect.addEventListener("change", () => {
       renderSpeakers();
@@ -772,25 +877,10 @@
       backendStateValue.textContent = "Generating";
 
       try {
-        const payload = {
-          text: document.getElementById("text").value,
-          language: languageSelect.value,
-          voice_mode: activeVoiceMode,
-        };
-
-        if (activeVoiceMode === "speaker") {
-          payload.speaker = speakerSelect.value;
-        } else {
-          payload.voice_description = voiceDescription.value;
-        }
-
-        const response = await fetch("/tts/", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        });
+        const response = await requestAudio(
+          document.getElementById("text").value,
+          languageSelect.value,
+        );
 
         if (!response.ok) {
           let message = "Speech generation failed.";

@@ -7,7 +7,7 @@ from tts_api.catalog import (
     UnsupportedSpeakerError,
     build_default_catalog,
 )
-from tts_api.schemas import TTSRequest
+from tts_api.schemas import TTSRequest, VoiceCloneRequest
 
 
 class CatalogTests(unittest.TestCase):
@@ -58,3 +58,11 @@ class SchemaTests(unittest.TestCase):
     def test_description_mode_requires_description(self) -> None:
         with self.assertRaises(ValidationError):
             TTSRequest(text="Hello", language="hi", voice_mode="description")
+
+    def test_clone_request_normalizes_language(self) -> None:
+        request = VoiceCloneRequest(text="Hello", language=" EN ")
+        self.assertEqual(request.language, "en")
+
+    def test_clone_request_requires_text(self) -> None:
+        with self.assertRaises(ValidationError):
+            VoiceCloneRequest(text="   ", language="hi")

@@ -1,15 +1,26 @@
 import asyncio
+import logging
+import types
 import unittest
+from contextlib import asynccontextmanager
+from unittest.mock import patch
 
 import numpy as np
 
-from tts_api.catalog import build_default_catalog
+from tts_api.catalog import UnsupportedLanguageError, build_default_catalog
 from tts_api.services import (
+    InvalidReferenceAudioError,
     IndicParlerTTSService,
     LoadedModelBundle,
+    LoadedVoiceCloneBundle,
     ModelLoadError,
     ModelNotReadyError,
+    ReferenceAudioPreprocessor,
     ServiceBusyError,
+    SynthesisConcurrencyGate,
+    XttsVoiceCloneService,
+    _ensure_generation_mixin_support,
+    _suppress_generation_mixin_log_warning,
 )
 
 
@@ -61,15 +72,117 @@ def fake_loader() -> LoadedModelBundle:
     )
 
 
-class BusySemaphore:
-    async def acquire(self) -> None:
-        await asyncio.sleep(1)
+class BusyGate:
+    @asynccontextmanager
+    async def claim(self):
+        raise ServiceBusyError("The server is currently processing another request.")
+        yield
 
-    def release(self) -> None:
-        return None
+    @property
+    def is_generating(self) -> bool:
+        return True
+
+
+class FakeCloneModel:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def tts(self, text: str, speaker_wav: str, language: str) -> list[float]:
+        self.calls.append(
+            {
+                "text": text,
+                "speaker_wav": speaker_wav,
+                "language": language,
+            }
+        )
+        return [0.1, -0.1, 0.2, -0.2]
+
+
+def fake_clone_loader() -> LoadedVoiceCloneBundle:
+    return LoadedVoiceCloneBundle(
+        model=FakeCloneModel(),
+        device="cpu",
+        sampling_rate=24000,
+        model_name="fake-clone-model",
+    )
+
+
+class FakeReferenceAudioPreprocessor:
+    def __init__(self) -> None:
+        self.calls: list[tuple[bytes, str | None]] = []
+
+    def prepare(self, audio_bytes: bytes, filename: str | None = None):  # type: ignore[no-untyped-def]
+        import tempfile
+        from pathlib import Path
+
+        if not audio_bytes:
+            raise InvalidReferenceAudioError("Reference audio file is empty.")
+
+        self.calls.append((audio_bytes, filename))
+        temp_dir = tempfile.mkdtemp(prefix="clone-test-")
+        audio_path = Path(temp_dir) / "reference.wav"
+        audio_path.write_bytes(b"fake-reference")
+        return type(
+            "PreparedReferenceAudioStub",
+            (),
+            {
+                "path": str(audio_path),
+                "temp_dir": temp_dir,
+            },
+        )()
 
 
 class ServiceTests(unittest.TestCase):
+    def test_generation_mixin_log_warning_filter_suppresses_target_message(self) -> None:
+        transformer_logger = logging.getLogger("transformers.modeling_utils")
+
+        with self.assertLogs("transformers.modeling_utils", level="WARNING") as captured:
+            with _suppress_generation_mixin_log_warning():
+                transformer_logger.warning(
+                    "GPT2InferenceModel has generative capabilities, as `prepare_inputs_for_generation` is explicitly overwritten. "
+                    "However, it doesn't directly inherit from `GenerationMixin`."
+                )
+                transformer_logger.warning("A different warning should still be visible.")
+
+        self.assertEqual(captured.output, ["WARNING:transformers.modeling_utils:A different warning should still be visible."])
+
+    def test_generation_mixin_helper_updates_non_generating_classes(self) -> None:
+        class FakeGenerationMixin:
+            pass
+
+        class FakePreTrainedModel:
+            pass
+
+        class FakeModel(FakePreTrainedModel):
+            pass
+
+        _ensure_generation_mixin_support(
+            FakeModel,
+            generation_mixin_class=FakeGenerationMixin,
+        )
+
+        self.assertTrue(issubclass(FakeModel, FakeGenerationMixin))
+
+    def test_generation_mixin_helper_uses_transformers_when_available(self) -> None:
+        class FakeGenerationMixin:
+            pass
+
+        class FakePreTrainedModel:
+            pass
+
+        class FakeModel(FakePreTrainedModel):
+            pass
+
+        fake_generation_utils = types.SimpleNamespace(GenerationMixin=FakeGenerationMixin)
+
+        with patch.dict(
+            "sys.modules",
+            {"transformers.generation.utils": fake_generation_utils},
+        ):
+            _ensure_generation_mixin_support(FakeModel)
+
+        self.assertTrue(issubclass(FakeModel, FakeGenerationMixin))
+
     def create_service(self) -> IndicParlerTTSService:
         return IndicParlerTTSService(
             catalog=build_default_catalog(),
@@ -118,7 +231,7 @@ class ServiceTests(unittest.TestCase):
         async def scenario() -> None:
             service = self.create_service()
             await service.load()
-            service._synthesis_semaphore = BusySemaphore()  # type: ignore[assignment]
+            service._generation_gate = BusyGate()  # type: ignore[assignment]
 
             with self.assertRaises(ServiceBusyError):
                 await service.synthesize(
@@ -170,5 +283,87 @@ class ServiceTests(unittest.TestCase):
                 service._bundle.description_tokenizer.last_text,
                 "custom calm voice with clean studio sound",
             )
+
+        asyncio.run(scenario())
+
+    def test_generation_gate_reports_global_busy_state(self) -> None:
+        gate = SynthesisConcurrencyGate()
+
+        async def scenario() -> None:
+            self.assertFalse(gate.is_generating)
+            async with gate.claim():
+                self.assertTrue(gate.is_generating)
+            self.assertFalse(gate.is_generating)
+
+        asyncio.run(scenario())
+
+    def test_clone_service_synthesizes_with_reference_audio(self) -> None:
+        async def scenario() -> None:
+            preprocessor = FakeReferenceAudioPreprocessor()
+            service = XttsVoiceCloneService(
+                catalog=build_default_catalog(),
+                model_loader=fake_clone_loader,
+                reference_audio_preprocessor=preprocessor,  # type: ignore[arg-type]
+            )
+            await service.load()
+            service._encode_wav = lambda audio, sample_rate: b"CLONE"  # type: ignore[method-assign]
+
+            wav_bytes = await service.synthesize(
+                language_code="hi",
+                text="Namaste duniya. Kaise ho?",
+                reference_audio=b"reference-bytes",
+                reference_filename="voice.wav",
+            )
+
+            self.assertEqual(wav_bytes, b"CLONE")
+            self.assertEqual(preprocessor.calls, [(b"reference-bytes", "voice.wav")])
+            self.assertEqual(service._bundle.model.calls[0]["language"], "hi")
+
+        asyncio.run(scenario())
+
+    def test_clone_service_accepts_catalog_language_beyond_hindi_and_english(self) -> None:
+        async def scenario() -> None:
+            preprocessor = FakeReferenceAudioPreprocessor()
+            service = XttsVoiceCloneService(
+                catalog=build_default_catalog(),
+                model_loader=fake_clone_loader,
+                reference_audio_preprocessor=preprocessor,  # type: ignore[arg-type]
+                supported_languages=("en", "hi", "bn"),
+            )
+            await service.load()
+            service._encode_wav = lambda audio, sample_rate: b"CLONE"  # type: ignore[method-assign]
+
+            wav_bytes = await service.synthesize(
+                language_code="bn",
+                text="Nomoskar",
+                reference_audio=b"reference-bytes",
+                reference_filename="voice.wav",
+            )
+
+            self.assertEqual(wav_bytes, b"CLONE")
+            self.assertEqual(preprocessor.calls, [(b"reference-bytes", "voice.wav")])
+            self.assertEqual(service._bundle.model.calls[0]["language"], "bn")
+
+        asyncio.run(scenario())
+
+    def test_clone_service_rejects_unsupported_xtts_language(self) -> None:
+        async def scenario() -> None:
+            preprocessor = FakeReferenceAudioPreprocessor()
+            service = XttsVoiceCloneService(
+                catalog=build_default_catalog(),
+                model_loader=fake_clone_loader,
+                reference_audio_preprocessor=preprocessor,  # type: ignore[arg-type]
+            )
+            await service.load()
+
+            with self.assertRaises(UnsupportedLanguageError):
+                await service.synthesize(
+                    language_code="gu",
+                    text="Kem cho?",
+                    reference_audio=b"reference-bytes",
+                    reference_filename="voice.wav",
+                )
+
+            self.assertEqual(preprocessor.calls, [])
 
         asyncio.run(scenario())

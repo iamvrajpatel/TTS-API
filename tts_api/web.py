@@ -1,9 +1,11 @@
+import logging
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
+from pydantic import ValidationError
 
 from tts_api.catalog import (
     LanguageCatalog,
@@ -11,12 +13,15 @@ from tts_api.catalog import (
     UnsupportedSpeakerError,
     build_default_catalog,
 )
-from tts_api.schemas import TTSRequest
+from tts_api.schemas import TTSRequest, VoiceCloneRequest
 from tts_api.services import (
+    InvalidReferenceAudioError,
     IndicParlerTTSService,
     ModelLoadError,
     ModelNotReadyError,
     ServiceBusyError,
+    VoiceCloneLoadError,
+    XttsVoiceCloneService,
 )
 
 
@@ -26,6 +31,7 @@ CUSTOM_DESCRIPTION_PLACEHOLDER = (
     "A warm, expressive female voice with a slightly brisk pace, "
     "clear pronunciation, and a clean studio recording with almost no background noise."
 )
+logger = logging.getLogger(__name__)
 
 
 def _build_filename(language_code: str, voice_label: str) -> str:
@@ -36,9 +42,11 @@ def _build_filename(language_code: str, voice_label: str) -> str:
 def create_app(
     service: IndicParlerTTSService | None = None,
     catalog: LanguageCatalog | None = None,
+    clone_service: XttsVoiceCloneService | None = None,
 ) -> FastAPI:
     language_catalog = catalog or build_default_catalog()
     tts_service = service or IndicParlerTTSService(catalog=language_catalog)
+    voice_clone_service = clone_service or XttsVoiceCloneService(catalog=language_catalog)
 
     app = FastAPI(title="AI4Bharat Indic Parler TTS API", version="1.0.0")
 
@@ -54,6 +62,7 @@ def create_app(
                 "request": request,
                 "languages": language_catalog.as_template_data(),
                 "custom_description_placeholder": CUSTOM_DESCRIPTION_PLACEHOLDER,
+                "clone_supported_languages": list(voice_clone_service.supported_languages),
             },
         )
 
@@ -80,6 +89,13 @@ def create_app(
                 "device": tts_service.device,
                 "model_error": load_error,
                 "generation_in_progress": tts_service.is_generating,
+                "voice_clone": {
+                    "ready": voice_clone_service.is_ready,
+                    "model_name": voice_clone_service.model_name,
+                    "device": voice_clone_service.device,
+                    "model_error": voice_clone_service.load_error,
+                    "supported_languages": list(voice_clone_service.supported_languages),
+                },
             },
             status_code=status_code,
         )
@@ -106,6 +122,7 @@ def create_app(
         except ServiceBusyError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except Exception as exc:
+            logger.exception("Unexpected error during TTS synthesis")
             raise HTTPException(
                 status_code=500,
                 detail="Unexpected error during speech generation.",
@@ -120,6 +137,56 @@ def create_app(
                 "Content-Disposition": f'inline; filename="{_build_filename(request_body.language, voice_label)}"',
                 "X-Generation-Time-Ms": f"{generation_time_ms:.0f}",
                 "X-Voice-Mode": request_body.voice_mode,
+            },
+        )
+
+    @app.post("/clone-voice")
+    async def clone_voice(
+        text: str = Form(...),
+        language: str = Form(...),
+        reference_audio: UploadFile = File(...),
+    ) -> Response:
+        try:
+            request_body = VoiceCloneRequest(text=text, language=language)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=exc.errors()) from exc
+
+        started_at = time.perf_counter()
+        reference_audio_bytes = await reference_audio.read()
+        try:
+            wav_bytes = await voice_clone_service.synthesize(
+                language_code=request_body.language,
+                text=request_body.text,
+                reference_audio=reference_audio_bytes,
+                reference_filename=reference_audio.filename,
+            )
+        except UnsupportedLanguageError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except InvalidReferenceAudioError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except VoiceCloneLoadError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ServiceBusyError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.exception("Unexpected error during voice clone synthesis")
+            raise HTTPException(
+                status_code=500,
+                detail="Unexpected error during voice clone generation.",
+            ) from exc
+
+        generation_time_ms = (time.perf_counter() - started_at) * 1000
+        voice_label = Path(reference_audio.filename or "reference").stem or "reference"
+
+        return Response(
+            content=wav_bytes,
+            media_type="audio/wav",
+            headers={
+                "Content-Disposition": (
+                    f'inline; filename="{_build_filename(request_body.language, f"{voice_label}-clone")}"'
+                ),
+                "X-Generation-Time-Ms": f"{generation_time_ms:.0f}",
+                "X-Voice-Mode": "clone",
             },
         )
 
